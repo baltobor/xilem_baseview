@@ -120,6 +120,19 @@ Run "Hello World" example
 ```shell
 cargo run --example hello
 ```
+Linux is currently in a transition. Most of the plugins I know of are still compiled for X11. So far, everything has been running smoothly in XWayland. The xilem_baseview example generates runtime errors on systems without X11 support. To test Wayland, the environment variable for WAYLAND_DISPLAY must exist.
+
+Either export the variable
+```shell
+export WAYLAND_DISPLAY=                                                       
+```
+                                                                                
+Or run the app like this:                                                     
+```shell
+WAYLAND_DISPLAY= cargo run --example hello
+```
+
+
 ## Licence
 
 Apache 2.0 Licence, same as Xilem.
