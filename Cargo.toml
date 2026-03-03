@@ -1,0 +1,52 @@
+# This file is part of the xilem_baseview project.
+# (c) 2026 by Jacek Wisniowski
+#
+# This project was released as open source under the
+# Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
+# (compatible with Xilem).
+
+[package]
+name = "xilem_baseview"
+version = "0.1.0"
+edition = "2021"
+authors = ["Jacek Wisniowski"]
+license = "Apache-2.0"
+description = "Xilem reactive UI for audio plugins via baseview"
+repository = "https://github.com/baltobor/xilem_baseview.git"
+keywords = ["gui", "audio", "plugin", "vst", "clap"]
+categories = ["gui", "multimedia::audio"]
+
+[dependencies]
+# Xilem view layer
+xilem_masonry = { git = "https://github.com/linebender/xilem", rev = "210c94a" }
+
+# Masonry widget toolkit (same git rev as xilem_masonry)
+masonry = { git = "https://github.com/linebender/xilem", rev = "210c94a" }
+
+# GPU rendering
+vello = { version = "0.7.0", default-features = false, features = ["wgpu"] }
+
+# Baseview for plugin windowing
+baseview = { git = "https://github.com/RustAudio/baseview", rev = "237d323c729f3aa99476ba3efa50129c5e86cad3" }
+
+# Raw window handle - use same version as baseview
+raw-window-handle = "0.5"
+
+# Keyboard handling - use same version as baseview
+keyboard-types = "0.6"
+
+# Logging
+tracing = "0.1"
+
+# Blocking GPU init
+pollster = "0.4"
+
+# Async runtime for task/worker views
+tokio = { version = "1.48", features = ["rt", "rt-multi-thread", "time", "sync"] }
+
+[dev-dependencies]
+tracing-subscriber = "0.3"
+
+[[example]]
+name = "hello"
+path = "examples/hello.rs"
