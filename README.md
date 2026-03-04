@@ -120,6 +120,12 @@ Run "Hello World" example
 ```shell
 cargo run --example hello
 ```
+
+Run "Synth Widgets" example
+```shell
+cargo run --example synth_widgets
+```
+
 ## Licence
 
 Apache 2.0 Licence, same as Xilem.

@@ -46,7 +46,12 @@ tokio = { version = "1.48", features = ["rt", "rt-multi-thread", "time", "sync"]
 
 [dev-dependencies]
 tracing-subscriber = "0.3"
+xilem_synth_widgets = { git = "https://github.com/baltobor/xilem_synth_widgets", branch = "unstable" }
 
 [[example]]
 name = "hello"
 path = "examples/hello.rs"
+
+[[example]]
+name = "synth_widgets"
+path = "examples/synth_widgets.rs"

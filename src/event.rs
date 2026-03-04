@@ -58,17 +58,30 @@ pub struct EventTranslator {
     modifiers: Modifiers,
     scale_factor: f64,
     start_time: std::time::Instant,
+    // Double-click tracking
+    last_click_time: std::time::Instant,
+    last_click_pos: (f64, f64),
+    click_count: u8,
 }
+
+/// Maximum time between clicks to count as double-click (in milliseconds).
+const DOUBLE_CLICK_TIME_MS: u128 = 500;
+/// Maximum distance between clicks to count as double-click (in pixels).
+const DOUBLE_CLICK_DISTANCE: f64 = 5.0;
 
 impl EventTranslator {
     pub fn new(scale_factor: f64) -> Self {
+        let now = std::time::Instant::now();
         Self {
             pointer_x: 0.0,
             pointer_y: 0.0,
             buttons: PointerButtons::default(),
             modifiers: Modifiers::empty(),
             scale_factor,
-            start_time: std::time::Instant::now(),
+            start_time: now,
+            last_click_time: now,
+            last_click_pos: (0.0, 0.0),
+            click_count: 0,
         }
     }
 
@@ -98,7 +111,7 @@ impl EventTranslator {
         }
     }
 
-    fn make_pointer_state(&self) -> PointerState {
+    fn make_pointer_state(&self, count: u8) -> PointerState {
         PointerState {
             time: self.get_time_nanos(),
             position: PhysicalPosition::new(
@@ -107,13 +120,32 @@ impl EventTranslator {
             ),
             buttons: self.buttons.clone(),
             modifiers: self.modifiers,
-            count: 1,
+            count,
             contact_geometry: masonry::dpi::PhysicalSize::new(1.0, 1.0),
             orientation: Default::default(),
             pressure: 0.0,
             tangential_pressure: 0.0,
             scale_factor: self.scale_factor,
         }
+    }
+
+    /// Check if a click qualifies as part of a multi-click sequence.
+    fn update_click_count(&mut self) -> u8 {
+        let now = std::time::Instant::now();
+        let elapsed = now.duration_since(self.last_click_time).as_millis();
+        let dx = self.pointer_x - self.last_click_pos.0;
+        let dy = self.pointer_y - self.last_click_pos.1;
+        let distance = (dx * dx + dy * dy).sqrt();
+
+        if elapsed < DOUBLE_CLICK_TIME_MS && distance < DOUBLE_CLICK_DISTANCE {
+            self.click_count = self.click_count.saturating_add(1);
+        } else {
+            self.click_count = 1;
+        }
+
+        self.last_click_time = now;
+        self.last_click_pos = (self.pointer_x, self.pointer_y);
+        self.click_count
     }
 
     fn translate_mouse(&mut self, event: &MouseEvent) -> Option<MasonryEvent> {
@@ -125,7 +157,7 @@ impl EventTranslator {
 
                 let update = PointerUpdate {
                     pointer: self.make_pointer_info(),
-                    current: self.make_pointer_state(),
+                    current: self.make_pointer_state(1),
                     coalesced: vec![],
                     predicted: vec![],
                 };
@@ -138,10 +170,13 @@ impl EventTranslator {
                 let btn = translate_mouse_button(*button);
                 self.buttons |= btn;
 
+                // Track click count for double-click detection
+                let count = self.update_click_count();
+
                 let event = PointerButtonEvent {
                     button: Some(btn),
                     pointer: self.make_pointer_info(),
-                    state: self.make_pointer_state(),
+                    state: self.make_pointer_state(count),
                 };
 
                 Some(MasonryEvent::Pointer(PointerEvent::Down(event)))
@@ -155,7 +190,7 @@ impl EventTranslator {
                 let event = PointerButtonEvent {
                     button: Some(btn),
                     pointer: self.make_pointer_info(),
-                    state: self.make_pointer_state(),
+                    state: self.make_pointer_state(self.click_count),
                 };
 
                 Some(MasonryEvent::Pointer(PointerEvent::Up(event)))
@@ -177,7 +212,7 @@ impl EventTranslator {
 
                 let event = PointerScrollEvent {
                     pointer: self.make_pointer_info(),
-                    state: self.make_pointer_state(),
+                    state: self.make_pointer_state(1),
                     delta: scroll_delta,
                 };
 
