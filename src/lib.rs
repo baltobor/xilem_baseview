@@ -33,7 +33,7 @@
 //!
 //! struct Counter(i32);
 //!
-//! fn app_logic(data: &mut Counter) -> impl WidgetView<Edit<Counter>> {
+//! fn app_logic(data: &mut Counter) -> impl WidgetView<Counter> {
 //!     flex_col((
 //!         label(format!("{}", data.0)),
 //!         text_button("increment", |data: &mut Counter| data.0 += 1),
@@ -81,5 +81,4 @@ pub mod prelude {
         XilemBaseview,
     };
     pub use masonry::peniko::Color;
-    pub use xilem_masonry::core::Edit;
 }

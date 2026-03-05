@@ -25,7 +25,6 @@ use masonry::core::WindowEvent as MasonryWindowEvent;
 use masonry::theme::default_property_set;
 use vello::peniko::Color;
 use vello::Scene;
-use xilem_masonry::core::Edit;
 use xilem_masonry::WidgetView;
 
 use crate::driver::{BaseviewDriver, MessagePackage};
@@ -52,7 +51,7 @@ impl<State, Logic, View> XilemHandler<State, Logic>
 where
     State: 'static,
     Logic: FnMut(&mut State) -> View,
-    View: WidgetView<Edit<State>>,
+    View: WidgetView<State>,
 {
     pub(crate) fn new(
         driver: BaseviewDriver<State, Logic>,
@@ -241,8 +240,8 @@ where
 
         let _ = render_root.handle_window_event(MasonryWindowEvent::AnimFrame(dt));
 
-        let (scene, _accessibility) = render_root.redraw();
-        self.scene = scene;
+        let (paint_result, _accessibility) = render_root.redraw();
+        self.scene = paint_result.composite();
 
         if let Err(e) = render_ctx.render(&self.scene, self.base_color) {
             tracing::error!("Render error: {}", e);
@@ -254,7 +253,7 @@ impl<State, Logic, View> WindowHandler for XilemHandler<State, Logic>
 where
     State: 'static,
     Logic: FnMut(&mut State) -> View,
-    View: WidgetView<Edit<State>>,
+    View: WidgetView<State>,
 {
     fn on_frame(&mut self, window: &mut Window) {
         self.ensure_initialized(window);

@@ -19,27 +19,25 @@ struct SynthState {
     fader_value: f32,
 }
 
-fn app_logic(state: &mut SynthState) -> impl WidgetView<Edit<SynthState>> {
-    // Note: Explicit type parameters on flex_col/flex_row help Rust's type inference
-    // with xilem_synth_widgets views in flex containers.
-    flex_col::<Edit<SynthState>, (), _>((
+fn app_logic(state: &mut SynthState) -> impl WidgetView<SynthState> {
+    flex_col((
         group_box(
             "Controls",
-            flex_row::<Edit<SynthState>, (), _>((
-                flex_col::<Edit<SynthState>, (), _>((
-                    knob::<Edit<SynthState>, ()>(0.0, 100.0, state.knob1_value, 50.0, |s, v| {
+            flex_row((
+                flex_col((
+                    knob(0.0, 100.0, state.knob1_value, 50.0, |s: &mut SynthState, v| {
                         s.knob1_value = v
                     }),
                     label("Frequency"),
                 )),
-                flex_col::<Edit<SynthState>, (), _>((
-                    knob::<Edit<SynthState>, ()>(0.0, 100.0, state.knob2_value, 50.0, |s, v| {
+                flex_col((
+                    knob(0.0, 100.0, state.knob2_value, 50.0, |s: &mut SynthState, v| {
                         s.knob2_value = v
                     }),
                     label("Resonance"),
                 )),
-                flex_col::<Edit<SynthState>, (), _>((
-                    fader::<Edit<SynthState>, ()>(-60.0, 6.0, state.fader_value as f64, -12.0, |s, v| {
+                flex_col((
+                    fader(-60.0, 6.0, state.fader_value as f64, -12.0, |s: &mut SynthState, v| {
                         s.fader_value = v as f32
                     }),
                     label("Volume"),

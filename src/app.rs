@@ -20,7 +20,6 @@ use std::sync::Arc;
 use baseview::{Window, WindowOpenOptions};
 use masonry::peniko::Blob;
 use raw_window_handle::HasRawWindowHandle;
-use xilem_masonry::core::Edit;
 use xilem_masonry::WidgetView;
 
 use crate::driver::BaseviewDriver;
@@ -42,7 +41,7 @@ pub struct XilemBaseviewHandle {
 ///
 /// struct AppState { count: i32 }
 ///
-/// fn app_logic(state: &mut AppState) -> impl WidgetView<Edit<AppState>> {
+/// fn app_logic(state: &mut AppState) -> impl WidgetView<AppState> {
 ///     // build your view tree here
 /// }
 ///
@@ -61,7 +60,7 @@ impl<State, Logic, View> XilemBaseview<State, Logic>
 where
     State: Send + 'static,
     Logic: FnMut(&mut State) -> View + Send + 'static,
-    View: WidgetView<Edit<State>>,
+    View: WidgetView<State>,
 {
     /// Create a new Xilem app builder.
     pub fn new(state: State, logic: Logic) -> Self {

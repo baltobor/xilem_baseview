@@ -26,7 +26,7 @@ use masonry::core::{ErasedAction, WidgetId};
 use masonry::peniko::Blob;
 use masonry::widgets::Passthrough;
 use xilem_masonry::core::{
-    DynMessage, Edit, MessageCtx, MessageResult, ProxyError, RawProxy, SendMessage, View, ViewId,
+    DynMessage, MessageCtx, MessageResult, ProxyError, RawProxy, SendMessage, View, ViewId,
     ViewPathTracker,
 };
 use xilem_masonry::{InitialRootWidget, MasonryRoot, ViewCtx, WidgetView};
@@ -40,7 +40,7 @@ pub(crate) struct BaseviewDriver<State: 'static, Logic> {
     root_view: Option<MasonryRoot<State>>,
     view_ctx: Option<ViewCtx>,
     view_state: Option<
-        <MasonryRoot<State> as View<Edit<State>, (), ViewCtx>>::ViewState,
+        <MasonryRoot<State> as View<State, (), ViewCtx>>::ViewState,
     >,
     proxy: Arc<BaseviewProxy>,
     runtime: Arc<tokio::runtime::Runtime>,
@@ -79,7 +79,7 @@ impl<State, Logic, View> BaseviewDriver<State, Logic>
 where
     State: 'static,
     Logic: FnMut(&mut State) -> View,
-    View: WidgetView<Edit<State>>,
+    View: WidgetView<State>,
 {
     /// Create a new driver and build the initial widget tree.
     ///

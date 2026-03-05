@@ -16,7 +16,7 @@ struct Counter {
     count: i32,
 }
 
-fn app_logic(data: &mut Counter) -> impl WidgetView<Edit<Counter>> {
+fn app_logic(data: &mut Counter) -> impl WidgetView<Counter> {
     flex_col((
         label(format!("Count: {}", data.count)),
         text_button("Increment", |data: &mut Counter| data.count += 1),
