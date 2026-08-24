@@ -87,17 +87,23 @@ where
         }
     }
 
-    /// Physical pixel size to initialize the GPU surface and masonry's
-    /// layout at, using the real scale factor once known (via the first
-    /// Resize event) and falling back to an unscaled 1.0 guess only if we
-    /// must render before any Resize event has arrived.
+    /// Size to initialize the GPU surface and masonry's layout at, plus the
+    /// real scale factor once known (via the first Resize event).
+    ///
+    /// NOTE: the wgpu surface here is backed directly by the NSView's
+    /// CAMetalLayer, whose `contentsScale` this crate does not currently set
+    /// explicitly - it stays at its AppKit default, so the layer presents
+    /// whatever pixel dimensions we hand it 1:1 against the view's *point*
+    /// frame. Sizing the surface at `width * scale` (e.g. 2x on Retina)
+    /// without also setting `contentsScale` to match makes the content
+    /// render at half its intended visual size, not sharper - confirmed by
+    /// testing. So width/height here intentionally stay in logical points
+    /// (unscaled) for now. `known_scale` is still tracked and returned so a
+    /// future fix (setting contentsScale alongside a truly physical-pixel
+    /// surface, for genuine Retina sharpness) has the value ready to use.
     fn physical_size(&self) -> (u32, u32, f64) {
         let scale = self.known_scale.unwrap_or(1.0);
-        (
-            (self.width * scale).round() as u32,
-            (self.height * scale).round() as u32,
-            scale,
-        )
+        (self.width.round() as u32, self.height.round() as u32, scale)
     }
 
     fn ensure_initialized(&mut self, window: &mut Window) {
@@ -105,7 +111,7 @@ where
             return;
         }
 
-        let (phys_width, phys_height, scale) = self.physical_size();
+        let (phys_width, phys_height, _scale) = self.physical_size();
 
         // Initialize GPU context
         if self.render_ctx.is_none() {
@@ -135,7 +141,12 @@ where
                 use_system_fonts: true,
                 size_policy: WindowSizePolicy::User,
                 size: masonry::dpi::PhysicalSize::new(phys_width, phys_height),
-                scale_factor: scale,
+                // Intentionally always 1.0 for now - see physical_size()'s
+                // doc comment. Passing the real backing scale here without
+                // also setting the NSView layer's contentsScale would make
+                // masonry lay out content at 2x into a 1x-sized surface,
+                // shrinking everything instead of sharpening it.
+                scale_factor: 1.0,
                 test_font: None,
             };
 
