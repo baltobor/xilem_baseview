@@ -276,14 +276,19 @@ where
                 self.height = height / scale;
                 self.event_translator.set_scale_factor(scale);
 
+                // Surface/layout stay sized in logical points (see
+                // physical_size()'s doc comment) - resize them to match the
+                // new logical size, not the event's raw physical pixels.
+                let resize_width = self.width.round() as u32;
+                let resize_height = self.height.round() as u32;
+
                 if let Some(ctx) = &mut self.render_ctx {
-                    ctx.resize(width as u32, height as u32);
+                    ctx.resize(resize_width, resize_height);
                 }
 
                 let _ = render_root.handle_window_event(MasonryWindowEvent::Resize(
-                    masonry::dpi::PhysicalSize::new(width as u32, height as u32),
+                    masonry::dpi::PhysicalSize::new(resize_width, resize_height),
                 ));
-                let _ = render_root.handle_window_event(MasonryWindowEvent::Rescale(scale));
             }
             MasonryEvent::Focus(_) => {}
             MasonryEvent::Close => {}
