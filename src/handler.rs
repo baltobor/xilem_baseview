@@ -45,6 +45,17 @@ pub(crate) struct XilemHandler<State: 'static, Logic> {
     width: f64,
     height: f64,
     initialized: bool,
+    /// Real backing scale factor, once known. `baseview::Window` has no
+    /// public getter for this at `on_frame`/`ensure_initialized` time (macOS
+    /// only reports it later via a `WindowEvent::Resized` carrying
+    /// `WindowInfo::scale()`), so eagerly creating the GPU surface and
+    /// masonry's RenderRoot at scale 1.0 leaves them permanently sized in
+    /// physical pixels equal to the *logical* point size - on a 2x Retina
+    /// display the NSView's real backing store is twice that in each
+    /// dimension, so content only ever paints the top-left quarter of the
+    /// view. Deferring init until the first Resize event lets us use the
+    /// real scale from the start.
+    known_scale: Option<f64>,
 }
 
 impl<State, Logic, View> XilemHandler<State, Logic>
@@ -72,7 +83,21 @@ where
             width,
             height,
             initialized: false,
+            known_scale: None,
         }
+    }
+
+    /// Physical pixel size to initialize the GPU surface and masonry's
+    /// layout at, using the real scale factor once known (via the first
+    /// Resize event) and falling back to an unscaled 1.0 guess only if we
+    /// must render before any Resize event has arrived.
+    fn physical_size(&self) -> (u32, u32, f64) {
+        let scale = self.known_scale.unwrap_or(1.0);
+        (
+            (self.width * scale).round() as u32,
+            (self.height * scale).round() as u32,
+            scale,
+        )
     }
 
     fn ensure_initialized(&mut self, window: &mut Window) {
@@ -80,9 +105,11 @@ where
             return;
         }
 
+        let (phys_width, phys_height, scale) = self.physical_size();
+
         // Initialize GPU context
         if self.render_ctx.is_none() {
-            match unsafe { RenderContext::new(window, self.width as u32, self.height as u32) } {
+            match unsafe { RenderContext::new(window, phys_width, phys_height) } {
                 Ok(ctx) => {
                     self.render_ctx = Some(ctx);
                     tracing::info!("GPU context initialized");
@@ -107,8 +134,8 @@ where
                 default_properties: Arc::new(default_property_set()),
                 use_system_fonts: true,
                 size_policy: WindowSizePolicy::User,
-                size: masonry::dpi::PhysicalSize::new(self.width as u32, self.height as u32),
-                scale_factor: 1.0,
+                size: masonry::dpi::PhysicalSize::new(phys_width, phys_height),
+                scale_factor: scale,
                 test_font: None,
             };
 
@@ -124,7 +151,11 @@ where
             tracing::info!("Xilem widget tree initialized");
         }
 
-        self.initialized = true;
+        // Only mark fully initialized once we know the real scale factor -
+        // if we had to fall back to 1.0 here, the next Resize event (which
+        // carries the real scale) will still trigger a proper re-init via
+        // handle_masonry_event's Resize branch.
+        self.initialized = self.known_scale.is_some();
     }
 
     fn process_signals(&mut self) {
@@ -196,6 +227,28 @@ where
     }
 
     fn handle_masonry_event(&mut self, event: MasonryEvent) {
+        // First time we learn the real backing scale factor: if
+        // ensure_initialized already ran with a guessed 1.0 scale, its GPU
+        // surface and RenderRoot are sized wrong (physical pixels == logical
+        // points, leaving content confined to a fraction of the real Retina
+        // backing store). Drop them so ensure_initialized rebuilds everything
+        // at the now-known-correct physical size on the next frame, instead
+        // of papering over a wrong initial size with resize/rescale events
+        // alone. Must happen before we borrow self.render_root below.
+        if let MasonryEvent::Resize { width, height, scale } = event {
+            if self.known_scale.is_none() && self.initialized {
+                self.known_scale = Some(scale);
+                self.render_ctx = None;
+                self.render_root = None;
+                self.initialized = false;
+                self.width = width / scale;
+                self.height = height / scale;
+                self.event_translator.set_scale_factor(scale);
+                return;
+            }
+            self.known_scale = Some(scale);
+        }
+
         let Some(render_root) = &mut self.render_root else {
             return;
         };
