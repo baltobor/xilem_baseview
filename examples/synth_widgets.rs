@@ -25,21 +25,33 @@ fn app_logic(state: &mut SynthState) -> impl WidgetView<SynthState> {
             "Controls",
             flex_row((
                 flex_col((
-                    knob(0.0, 100.0, state.knob1_value, 50.0, |s: &mut SynthState, v| {
-                        s.knob1_value = v
-                    }),
+                    knob(
+                        0.0,
+                        100.0,
+                        state.knob1_value,
+                        50.0,
+                        |s: &mut SynthState, v| s.knob1_value = v,
+                    ),
                     label("Frequency"),
                 )),
                 flex_col((
-                    knob(0.0, 100.0, state.knob2_value, 50.0, |s: &mut SynthState, v| {
-                        s.knob2_value = v
-                    }),
+                    knob(
+                        0.0,
+                        100.0,
+                        state.knob2_value,
+                        50.0,
+                        |s: &mut SynthState, v| s.knob2_value = v,
+                    ),
                     label("Resonance"),
                 )),
                 flex_col((
-                    fader(-60.0, 6.0, state.fader_value as f64, -12.0, |s: &mut SynthState, v| {
-                        s.fader_value = v as f32
-                    }),
+                    fader(
+                        -60.0,
+                        6.0,
+                        state.fader_value as f64,
+                        -12.0,
+                        |s: &mut SynthState, v| s.fader_value = v as f32,
+                    ),
                     label("Volume"),
                 )),
             )),

@@ -39,9 +39,7 @@ pub(crate) struct BaseviewDriver<State: 'static, Logic> {
     pub(crate) logic: Logic,
     root_view: Option<MasonryRoot<State>>,
     view_ctx: Option<ViewCtx>,
-    view_state: Option<
-        <MasonryRoot<State> as View<State, (), ViewCtx>>::ViewState,
-    >,
+    view_state: Option<<MasonryRoot<State> as View<State, (), ViewCtx>>::ViewState>,
     proxy: Arc<BaseviewProxy>,
     runtime: Arc<tokio::runtime::Runtime>,
     fonts: Vec<Blob<u8>>,
@@ -89,10 +87,7 @@ where
         logic: Logic,
         runtime: Arc<tokio::runtime::Runtime>,
         fonts: Vec<Blob<u8>>,
-    ) -> (
-        Self,
-        tokio::sync::mpsc::UnboundedReceiver<MessagePackage>,
-    ) {
+    ) -> (Self, tokio::sync::mpsc::UnboundedReceiver<MessagePackage>) {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let proxy = Arc::new(BaseviewProxy {
             sender: std::sync::Mutex::new(tx),
@@ -174,13 +169,15 @@ where
         let view_ctx = self.view_ctx.as_mut().unwrap();
         let view_state = self.view_state.as_mut().unwrap();
 
-        let mut message_context = MessageCtx::new(
-            std::mem::take(view_ctx.environment()),
-            id_path,
-            message,
-        );
+        let mut message_context =
+            MessageCtx::new(std::mem::take(view_ctx.environment()), id_path, message);
 
-        let result = root_view.message(view_state, &mut message_context, render_root, &mut self.state);
+        let result = root_view.message(
+            view_state,
+            &mut message_context,
+            render_root,
+            &mut self.state,
+        );
 
         let (env, _id_path, _message) = message_context.finish();
         *view_ctx.environment() = env;
@@ -188,11 +185,7 @@ where
         result
     }
 
-    fn handle_message_result(
-        &mut self,
-        render_root: &mut RenderRoot,
-        result: MessageResult<()>,
-    ) {
+    fn handle_message_result(&mut self, render_root: &mut RenderRoot, result: MessageResult<()>) {
         match result {
             MessageResult::Action(()) => {
                 self.run_logic(render_root);
@@ -201,7 +194,13 @@ where
                 let root_view = self.root_view.as_ref().unwrap();
                 let view_ctx = self.view_ctx.as_mut().unwrap();
                 let view_state = self.view_state.as_mut().unwrap();
-                root_view.rebuild(root_view, view_state, view_ctx, render_root, &mut self.state);
+                root_view.rebuild(
+                    root_view,
+                    view_state,
+                    view_ctx,
+                    render_root,
+                    &mut self.state,
+                );
             }
             MessageResult::Nop => {}
             MessageResult::Stale => {
@@ -219,7 +218,13 @@ where
         let view_ctx = self.view_ctx.as_mut().unwrap();
         let view_state = self.view_state.as_mut().unwrap();
 
-        new_root.rebuild(prev_root, view_state, view_ctx, render_root, &mut self.state);
+        new_root.rebuild(
+            prev_root,
+            view_state,
+            view_ctx,
+            render_root,
+            &mut self.state,
+        );
 
         self.root_view = Some(new_root);
     }

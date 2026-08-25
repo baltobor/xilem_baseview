@@ -5,47 +5,56 @@
 //! Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
 //! (compatible with Xilem).
 //!
-//! Rendering pipeline for Xilem in baseview
+//! Rendering pipeline for Xilem in baseview.
 //!
-//! Sets up wgpu surface and Vello renderer for drawing masonry widgets.
-//! Uses an intermediate texture because Vello uses compute shaders that
-//! can't directly target surface textures.
+//! Sets up a wgpu surface and renders masonry's paint output into it via
+//! `masonry_imaging`'s own renderer (the same one `masonry_winit` uses)
+//! `masonry_imaging` owns the translation from masonry's
+//! `VisualLayerPlan`/`PreparedFrame` into a backend and applies the
+//! paint-time backing-scale transform itself. This solves scaling
+//! issues with MacOS Retina screens.
 //!
-//! Adapted from masonry_baseview.
-//! (see https://github.com/baltobor/masonry_baseview for reference)
+//! TODO: Test on linux and Windows.
 
 use std::sync::Arc;
-use vello::peniko::Color;
-use vello::wgpu;
-use vello::{AaConfig, RenderParams, Renderer, RendererOptions, Scene};
+
+use masonry::peniko::Color;
+use masonry_imaging::vello::{Renderer as ImagingRenderer, TextureTarget};
+use masonry_imaging::{Layer as ImagingLayer, PreparedFrame, TextureRenderer};
+use wgpu::util::TextureBlitter;
 use wgpu::{
-    BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
-    BindGroupLayoutEntry, BindingResource, BindingType, BlendState, ColorTargetState,
-    ColorWrites, CompositeAlphaMode, Device, DeviceDescriptor, Features, FragmentState, Instance,
-    InstanceDescriptor, Limits, MultisampleState, PipelineLayoutDescriptor, PresentMode,
-    PrimitiveState, Queue, RenderPipeline, RenderPipelineDescriptor, Sampler, SamplerBindingType,
-    SamplerDescriptor, ShaderModuleDescriptor, ShaderSource, ShaderStages, Surface,
-    SurfaceConfiguration, Texture, TextureDescriptor, TextureDimension, TextureFormat,
-    TextureSampleType, TextureUsages, TextureView, TextureViewDescriptor, TextureViewDimension,
-    VertexState,
+    CompositeAlphaMode, Device, DeviceDescriptor, Features, Instance, InstanceDescriptor, Limits,
+    PresentMode, Queue, Surface, SurfaceConfiguration, Texture, TextureDescriptor,
+    TextureDimension, TextureFormat, TextureUsages, TextureView, TextureViewDescriptor,
 };
 
-/// GPU rendering context for Vello with intermediate texture blitting.
+/// GPU rendering context: owns the wgpu surface and masonry's own renderer.
+///
+/// masonry_imaging's Vello backend renders into an Rgba8Unorm storage
+/// texture internally (its compute shaders require that binding format),
+/// so it can't target the surface's own texture view directly when the
+/// surface format differs (e.g. macOS/Metal surfaces are commonly
+/// Bgra8Unorm) - doing so is a wgpu validation error. Render into an
+/// intermediate Rgba8Unorm texture instead, then blit that into the real
+/// surface texture, matching masonry_winit's own render pipeline.
 pub struct RenderContext {
     pub device: Arc<Device>,
     pub queue: Arc<Queue>,
-    pub renderer: Renderer,
-    pub surface: Surface<'static>,
-    pub surface_config: SurfaceConfiguration,
+    renderer: ImagingRenderer,
+    surface: Surface<'static>,
+    surface_config: SurfaceConfiguration,
     target_texture: Texture,
     target_view: TextureView,
-    blit_pipeline: RenderPipeline,
-    blit_bind_group_layout: BindGroupLayout,
-    blit_sampler: Sampler,
+    blitter: TextureBlitter,
 }
 
 impl RenderContext {
     /// Create a new render context for a window.
+    ///
+    /// `width`/`height` are in logical points, matching masonry's own
+    /// layout units - masonry applies the backing scale itself at paint
+    /// time (see `masonry_imaging::imaging::render::PreparedFrame`), so
+    /// layout must not be pre-scaled here.
     ///
     /// # Safety
     ///
@@ -76,17 +85,17 @@ impl RenderContext {
             compatible_surface: Some(&surface),
             force_fallback_adapter: false,
         }))
-        .map_err(|e: wgpu::RequestAdapterError| RenderError::Device(format!("Adapter request failed: {:?}", e)))?;
+        .map_err(|e: wgpu::RequestAdapterError| {
+            RenderError::Device(format!("Adapter request failed: {:?}", e))
+        })?;
 
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &DeviceDescriptor {
-                required_features: Features::empty(),
-                required_limits: Limits::default(),
-                label: Some("xilem_baseview"),
-                memory_hints: wgpu::MemoryHints::default(),
-                ..Default::default()
-            },
-        ))
+        let (device, queue) = pollster::block_on(adapter.request_device(&DeviceDescriptor {
+            required_features: Features::empty(),
+            required_limits: Limits::default(),
+            label: Some("xilem_baseview"),
+            memory_hints: wgpu::MemoryHints::default(),
+            ..Default::default()
+        }))
         .map_err(|e: wgpu::RequestDeviceError| RenderError::Device(format!("{:?}", e)))?;
 
         let device = Arc::new(device);
@@ -100,7 +109,10 @@ impl RenderContext {
             .copied()
             .unwrap_or(TextureFormat::Bgra8Unorm);
 
-        let alpha_mode = if caps.alpha_modes.contains(&CompositeAlphaMode::PreMultiplied) {
+        let alpha_mode = if caps
+            .alpha_modes
+            .contains(&CompositeAlphaMode::PreMultiplied)
+        {
             CompositeAlphaMode::PreMultiplied
         } else {
             CompositeAlphaMode::Auto
@@ -122,23 +134,11 @@ impl RenderContext {
 
         surface.configure(&device, &surface_config);
 
-        let target_format = TextureFormat::Rgba8Unorm;
-        let (target_texture, target_view) =
-            create_target_texture(&device, width, height, target_format);
+        let (target_texture, target_view) = create_target_texture(&device, width, height);
+        let blitter = TextureBlitter::new(&device, surface_format);
 
-        let (blit_pipeline, blit_bind_group_layout, blit_sampler) =
-            create_blit_pipeline(&device, surface_format);
-
-        let renderer = Renderer::new(
-            &*device,
-            RendererOptions {
-                use_cpu: false,
-                antialiasing_support: vello::AaSupport::all(),
-                num_init_threads: None,
-                pipeline_cache: None,
-            },
-        )
-        .map_err(|e: vello::Error| RenderError::Renderer(e.to_string()))?;
+        let renderer = ImagingRenderer::new((*device).clone(), (*queue).clone())
+            .map_err(|e| RenderError::Renderer(e.to_string()))?;
 
         Ok(Self {
             device,
@@ -148,13 +148,12 @@ impl RenderContext {
             surface_config,
             target_texture,
             target_view,
-            blit_pipeline,
-            blit_bind_group_layout,
-            blit_sampler,
+            blitter,
         })
     }
 
-    /// Resize the rendering surface.
+    /// Resize the rendering surface. `width`/`height` are physical pixels
+    /// (the actual on-screen surface resolution).
     pub fn resize(&mut self, width: u32, height: u32) {
         let width = width.max(1);
         let height = height.max(1);
@@ -163,33 +162,39 @@ impl RenderContext {
         self.surface_config.height = height;
         self.surface.configure(&self.device, &self.surface_config);
 
-        let (target_texture, target_view) =
-            create_target_texture(&self.device, width, height, TextureFormat::Rgba8Unorm);
+        let (target_texture, target_view) = create_target_texture(&self.device, width, height);
         self.target_texture = target_texture;
         self.target_view = target_view;
     }
 
-    /// Render a Vello scene to the surface.
-    pub fn render(&mut self, scene: &Scene, base_color: Color) -> Result<(), RenderError> {
+    /// Render a masonry frame (base scene plus overlays) to the surface.
+    ///
+    /// `scale` is the display's backing scale factor; masonry_imaging's
+    /// `PreparedFrame` applies it internally when compositing, so the base
+    /// scene and overlay layers passed in must be in logical-point
+    /// coordinates, not pre-scaled.
+    pub fn render(
+        &mut self,
+        base: &masonry::imaging::record::Scene,
+        overlays: &[ImagingLayer<'_>],
+        base_color: Color,
+        scale: f64,
+    ) -> Result<(), RenderError> {
         let width = self.surface_config.width;
         let height = self.surface_config.height;
 
-        let render_params = RenderParams {
-            base_color,
-            width,
-            height,
-            antialiasing_method: AaConfig::Msaa16,
-        };
+        let mut frame = PreparedFrame::new(width, height, scale, base_color, base, overlays);
 
         self.renderer
-            .render_to_texture(
-                &*self.device,
-                &*self.queue,
-                scene,
-                &self.target_view,
-                &render_params,
+            .render_source_into_texture(
+                &mut frame,
+                TextureTarget {
+                    view: self.target_view.clone(),
+                    width,
+                    height,
+                },
             )
-            .map_err(|e: vello::Error| RenderError::Renderer(format!("{:?}", e)))?;
+            .map_err(|e| RenderError::Renderer(e.to_string()))?;
 
         let surface_texture = self
             .surface
@@ -200,64 +205,27 @@ impl RenderContext {
             .texture
             .create_view(&TextureViewDescriptor::default());
 
-        let bind_group = self.device.create_bind_group(&BindGroupDescriptor {
-            label: Some("blit_bind_group"),
-            layout: &self.blit_bind_group_layout,
-            entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: BindingResource::TextureView(&self.target_view),
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: BindingResource::Sampler(&self.blit_sampler),
-                },
-            ],
-        });
-
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("blit_encoder"),
+                label: Some("xilem_baseview_surface_blit"),
             });
-
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("blit_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &surface_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-
-            render_pass.set_pipeline(&self.blit_pipeline);
-            render_pass.set_bind_group(0, &bind_group, &[]);
-            render_pass.draw(0..3, 0..1);
-        }
-
+        self.blitter
+            .copy(&self.device, &mut encoder, &self.target_view, &surface_view);
         self.queue.submit(std::iter::once(encoder.finish()));
+
         surface_texture.present();
 
         Ok(())
     }
 }
 
-fn create_target_texture(
-    device: &Device,
-    width: u32,
-    height: u32,
-    format: TextureFormat,
-) -> (Texture, TextureView) {
+/// Create the intermediate Rgba8Unorm render target masonry_imaging's Vello
+/// backend renders into (see RenderContext's doc comment for why this is
+/// needed instead of targeting the surface directly).
+fn create_target_texture(device: &Device, width: u32, height: u32) -> (Texture, TextureView) {
     let texture = device.create_texture(&TextureDescriptor {
-        label: Some("vello_target"),
+        label: Some("xilem_baseview_target"),
         size: wgpu::Extent3d {
             width,
             height,
@@ -266,113 +234,14 @@ fn create_target_texture(
         mip_level_count: 1,
         sample_count: 1,
         dimension: TextureDimension::D2,
-        format,
-        usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
+        format: TextureFormat::Rgba8Unorm,
+        usage: TextureUsages::STORAGE_BINDING
+            | TextureUsages::TEXTURE_BINDING
+            | TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     });
-
     let view = texture.create_view(&TextureViewDescriptor::default());
     (texture, view)
-}
-
-// TODO: Does this work on all platforms?
-// TODO: Tested on MacOS and ArchLinux and Cosmic.
-fn create_blit_pipeline(
-    device: &Device,
-    target_format: TextureFormat,
-) -> (RenderPipeline, BindGroupLayout, Sampler) {
-    let shader_source = r#"
-        @group(0) @binding(0) var t_texture: texture_2d<f32>;
-        @group(0) @binding(1) var s_sampler: sampler;
-
-        struct VertexOutput {
-            @builtin(position) position: vec4<f32>,
-            @location(0) tex_coord: vec2<f32>,
-        }
-
-        @vertex
-        fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
-            var out: VertexOutput;
-            let x = f32(i32(vertex_index) / 2) * 4.0 - 1.0;
-            let y = f32(i32(vertex_index) % 2) * 4.0 - 1.0;
-            out.position = vec4<f32>(x, y, 0.0, 1.0);
-            out.tex_coord = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
-            return out;
-        }
-
-        @fragment
-        fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-            return textureSample(t_texture, s_sampler, in.tex_coord);
-        }
-    "#;
-
-    let shader = device.create_shader_module(ShaderModuleDescriptor {
-        label: Some("blit_shader"),
-        source: ShaderSource::Wgsl(shader_source.into()),
-    });
-
-    let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-        label: Some("blit_bind_group_layout"),
-        entries: &[
-            BindGroupLayoutEntry {
-                binding: 0,
-                visibility: ShaderStages::FRAGMENT,
-                ty: BindingType::Texture {
-                    sample_type: TextureSampleType::Float { filterable: true },
-                    view_dimension: TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            BindGroupLayoutEntry {
-                binding: 1,
-                visibility: ShaderStages::FRAGMENT,
-                ty: BindingType::Sampler(SamplerBindingType::Filtering),
-                count: None,
-            },
-        ],
-    });
-
-    let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-        label: Some("blit_pipeline_layout"),
-        bind_group_layouts: &[&bind_group_layout],
-        push_constant_ranges: &[],
-    });
-
-    let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-        label: Some("blit_pipeline"),
-        layout: Some(&pipeline_layout),
-        vertex: VertexState {
-            module: &shader,
-            entry_point: Some("vs_main"),
-            buffers: &[],
-            compilation_options: Default::default(),
-        },
-        fragment: Some(FragmentState {
-            module: &shader,
-            entry_point: Some("fs_main"),
-            targets: &[Some(ColorTargetState {
-                format: target_format,
-                blend: Some(BlendState::REPLACE),
-                write_mask: ColorWrites::ALL,
-            })],
-            compilation_options: Default::default(),
-        }),
-        primitive: PrimitiveState::default(),
-        depth_stencil: None,
-        multisample: MultisampleState::default(),
-        multiview: None,
-        cache: None,
-    });
-
-    let sampler = device.create_sampler(&SamplerDescriptor {
-        label: Some("blit_sampler"),
-        mag_filter: wgpu::FilterMode::Linear,
-        min_filter: wgpu::FilterMode::Linear,
-        ..Default::default()
-    });
-
-    (pipeline, bind_group_layout, sampler)
 }
 
 /// Errors that can occur during rendering.
@@ -398,7 +267,7 @@ impl std::fmt::Display for RenderError {
 
 impl std::error::Error for RenderError {}
 
-/// Convert raw_window_handle 0.5 display handle to 0.6 format.
+/// Convert raw_window_handle 0.5 display handle to wgpu's rwh format.
 fn convert_display_handle(
     handle: raw_window_handle::RawDisplayHandle,
 ) -> wgpu::rwh::RawDisplayHandle {
@@ -409,7 +278,6 @@ fn convert_display_handle(
         #[cfg(target_os = "macos")]
         Old::AppKit(_) => New::AppKit(wgpu::rwh::AppKitDisplayHandle::new()),
 
-        // TODO: I tested Wayland. Xlib (hopefully) works as well.
         #[cfg(target_os = "linux")]
         Old::Xlib(h) => New::Xlib(wgpu::rwh::XlibDisplayHandle::new(
             std::ptr::NonNull::new(h.display),
@@ -427,7 +295,6 @@ fn convert_display_handle(
             std::ptr::NonNull::new(h.display).unwrap(),
         )),
 
-        // TODO: Untested! But might work.
         #[cfg(target_os = "windows")]
         Old::Windows(_) => New::Windows(wgpu::rwh::WindowsDisplayHandle::new()),
 
@@ -435,7 +302,7 @@ fn convert_display_handle(
     }
 }
 
-/// Convert raw_window_handle 0.5 window handle to 0.6 format.
+/// Convert raw_window_handle 0.5 window handle to wgpu's rwh format.
 fn convert_window_handle(handle: raw_window_handle::RawWindowHandle) -> wgpu::rwh::RawWindowHandle {
     use raw_window_handle::RawWindowHandle as Old;
     use wgpu::rwh::RawWindowHandle as New;
@@ -448,7 +315,6 @@ fn convert_window_handle(handle: raw_window_handle::RawWindowHandle) -> wgpu::rw
             New::AppKit(new_handle)
         }
 
-        // TODO: I tested Wayland. Xlib (hopefully) works as well.
         #[cfg(target_os = "linux")]
         Old::Xlib(h) => New::Xlib(wgpu::rwh::XlibWindowHandle::new(h.window)),
 
@@ -462,7 +328,6 @@ fn convert_window_handle(handle: raw_window_handle::RawWindowHandle) -> wgpu::rw
             std::ptr::NonNull::new(h.surface).unwrap(),
         )),
 
-        // TODO: Untested! But might work.
         #[cfg(target_os = "windows")]
         Old::Win32(h) => {
             let mut new_handle = wgpu::rwh::Win32WindowHandle::new(

@@ -15,7 +15,7 @@ use baseview::{Event, MouseButton, MouseEvent, ScrollDelta, WindowEvent};
 use keyboard_types::Modifiers as KbModifiers;
 use masonry::core::pointer::PointerButtons;
 use masonry::core::{
-    Modifiers, PointerButton, PointerButtonEvent, PointerEvent, PointerInfo, PointerId,
+    Modifiers, PointerButton, PointerButtonEvent, PointerEvent, PointerId, PointerInfo,
     PointerScrollEvent, PointerState, PointerType, PointerUpdate,
 };
 use masonry::dpi::PhysicalPosition;
@@ -150,7 +150,10 @@ impl EventTranslator {
 
     fn translate_mouse(&mut self, event: &MouseEvent) -> Option<MasonryEvent> {
         match event {
-            MouseEvent::CursorMoved { position, modifiers } => {
+            MouseEvent::CursorMoved {
+                position,
+                modifiers,
+            } => {
                 self.pointer_x = position.x / self.scale_factor;
                 self.pointer_y = position.y / self.scale_factor;
                 self.modifiers = translate_modifiers(*modifiers);
@@ -200,14 +203,10 @@ impl EventTranslator {
                 self.modifiers = translate_modifiers(*modifiers);
 
                 let scroll_delta = match delta {
-                    ScrollDelta::Lines { x, y } => {
-                        masonry::core::ScrollDelta::LineDelta(*x, *y)
-                    }
-                    ScrollDelta::Pixels { x, y } => {
-                        masonry::core::ScrollDelta::PixelDelta(PhysicalPosition::new(
-                            *x as f64, *y as f64,
-                        ))
-                    }
+                    ScrollDelta::Lines { x, y } => masonry::core::ScrollDelta::LineDelta(*x, *y),
+                    ScrollDelta::Pixels { x, y } => masonry::core::ScrollDelta::PixelDelta(
+                        PhysicalPosition::new(*x as f64, *y as f64),
+                    ),
                 };
 
                 let event = PointerScrollEvent {
