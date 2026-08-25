@@ -61,23 +61,20 @@ impl RenderContext {
     /// The window handle must remain valid for the lifetime of this context.
     pub unsafe fn new<W>(window: &W, width: u32, height: u32) -> Result<Self, RenderError>
     where
-        W: raw_window_handle::HasRawWindowHandle + raw_window_handle::HasRawDisplayHandle,
+        W: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle,
     {
-        #[allow(unused_imports)]
-        use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
         let instance = Instance::new(&InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..Default::default()
         });
 
-        let raw_window = window.raw_window_handle();
-        let raw_display = window.raw_display_handle();
-
+        // baseview and wgpu both use raw-window-handle 0.6 now, so no manual
+        // handle-format conversion is needed (unlike when baseview was on
+        // 0.5 and wgpu already on 0.6).
+        let target = wgpu::SurfaceTargetUnsafe::from_window(window)
+            .map_err(|e| RenderError::Surface(e.to_string()))?;
         let surface = instance
-            .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
-                raw_display_handle: convert_display_handle(raw_display),
-                raw_window_handle: convert_window_handle(raw_window),
-            })
+            .create_surface_unsafe(target)
             .map_err(|e: wgpu::CreateSurfaceError| RenderError::Surface(e.to_string()))?;
 
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -266,77 +263,3 @@ impl std::fmt::Display for RenderError {
 }
 
 impl std::error::Error for RenderError {}
-
-/// Convert raw_window_handle 0.5 display handle to wgpu's rwh format.
-fn convert_display_handle(
-    handle: raw_window_handle::RawDisplayHandle,
-) -> wgpu::rwh::RawDisplayHandle {
-    use raw_window_handle::RawDisplayHandle as Old;
-    use wgpu::rwh::RawDisplayHandle as New;
-
-    match handle {
-        #[cfg(target_os = "macos")]
-        Old::AppKit(_) => New::AppKit(wgpu::rwh::AppKitDisplayHandle::new()),
-
-        #[cfg(target_os = "linux")]
-        Old::Xlib(h) => New::Xlib(wgpu::rwh::XlibDisplayHandle::new(
-            std::ptr::NonNull::new(h.display),
-            h.screen,
-        )),
-
-        #[cfg(target_os = "linux")]
-        Old::Xcb(h) => New::Xcb(wgpu::rwh::XcbDisplayHandle::new(
-            std::ptr::NonNull::new(h.connection),
-            h.screen,
-        )),
-
-        #[cfg(target_os = "linux")]
-        Old::Wayland(h) => New::Wayland(wgpu::rwh::WaylandDisplayHandle::new(
-            std::ptr::NonNull::new(h.display).unwrap(),
-        )),
-
-        #[cfg(target_os = "windows")]
-        Old::Windows(_) => New::Windows(wgpu::rwh::WindowsDisplayHandle::new()),
-
-        _ => panic!("Unsupported display handle type"),
-    }
-}
-
-/// Convert raw_window_handle 0.5 window handle to wgpu's rwh format.
-fn convert_window_handle(handle: raw_window_handle::RawWindowHandle) -> wgpu::rwh::RawWindowHandle {
-    use raw_window_handle::RawWindowHandle as Old;
-    use wgpu::rwh::RawWindowHandle as New;
-
-    match handle {
-        #[cfg(target_os = "macos")]
-        Old::AppKit(h) => {
-            let new_handle =
-                wgpu::rwh::AppKitWindowHandle::new(std::ptr::NonNull::new(h.ns_view).unwrap());
-            New::AppKit(new_handle)
-        }
-
-        #[cfg(target_os = "linux")]
-        Old::Xlib(h) => New::Xlib(wgpu::rwh::XlibWindowHandle::new(h.window)),
-
-        #[cfg(target_os = "linux")]
-        Old::Xcb(h) => New::Xcb(wgpu::rwh::XcbWindowHandle::new(
-            std::num::NonZeroU32::new(h.window).unwrap(),
-        )),
-
-        #[cfg(target_os = "linux")]
-        Old::Wayland(h) => New::Wayland(wgpu::rwh::WaylandWindowHandle::new(
-            std::ptr::NonNull::new(h.surface).unwrap(),
-        )),
-
-        #[cfg(target_os = "windows")]
-        Old::Win32(h) => {
-            let mut new_handle = wgpu::rwh::Win32WindowHandle::new(
-                std::num::NonZeroIsize::new(h.hwnd as isize).unwrap(),
-            );
-            new_handle.hinstance = std::num::NonZeroIsize::new(h.hinstance as isize);
-            New::Win32(new_handle)
-        }
-
-        _ => panic!("Unsupported window handle type"),
-    }
-}

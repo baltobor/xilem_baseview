@@ -28,7 +28,9 @@ pub fn translate_mouse_button(button: MouseButton) -> PointerButton {
         MouseButton::Middle => PointerButton::Auxiliary,
         MouseButton::Back => PointerButton::X1,
         MouseButton::Forward => PointerButton::X2,
-        MouseButton::Other(_) => PointerButton::Primary,
+        // MouseButton is #[non_exhaustive]; MouseButton::Other(_) and any
+        // future variants both fall back to Primary.
+        _ => PointerButton::Primary,
     }
 }
 
@@ -96,6 +98,8 @@ impl EventTranslator {
             Event::Mouse(mouse) => self.translate_mouse(mouse),
             Event::Keyboard(kb) => self.translate_keyboard(kb),
             Event::Window(win) => self.translate_window(win),
+            // Event is #[non_exhaustive]; ignore any future variant types.
+            _ => None,
         }
     }
 
@@ -240,17 +244,13 @@ impl EventTranslator {
 
     fn translate_window(&mut self, event: &WindowEvent) -> Option<MasonryEvent> {
         match event {
-            WindowEvent::Resized(info) => {
-                self.scale_factor = info.scale();
-                Some(MasonryEvent::Resize {
-                    width: info.physical_size().width as f64,
-                    height: info.physical_size().height as f64,
-                    scale: info.scale(),
-                })
-            }
             WindowEvent::Focused => Some(MasonryEvent::Focus(true)),
             WindowEvent::Unfocused => Some(MasonryEvent::Focus(false)),
             WindowEvent::WillClose => Some(MasonryEvent::Close),
+            // WindowEvent no longer carries a Resized variant - resize is
+            // now delivered directly via WindowHandler::resized(), handled
+            // in handler.rs rather than through this event translation path.
+            _ => None,
         }
     }
 }
@@ -259,11 +259,6 @@ impl EventTranslator {
 pub enum MasonryEvent {
     Pointer(PointerEvent),
     Keyboard(keyboard_types::KeyboardEvent),
-    Resize {
-        width: f64,
-        height: f64,
-        scale: f64,
-    },
     #[allow(dead_code)]
     Focus(bool),
     Close,

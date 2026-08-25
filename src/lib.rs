@@ -41,11 +41,7 @@
 //! }
 //!
 //! XilemBaseview::new(Counter(0), app_logic)
-//!     .open_blocking(WindowOpenOptions {
-//!         title: "Counter".into(),
-//!         size: Size::new(300.0, 200.0),
-//!         scale: WindowScalePolicy::SystemScaleFactor,
-//!     });
+//!     .open_blocking(WindowSettings::new().with_size(Size::new(300.0, 200.0)));
 //! ```
 
 mod app;
@@ -58,7 +54,8 @@ pub(crate) mod render;
 pub use app::{XilemBaseview, XilemBaseviewHandle};
 
 // Re-export baseview types needed for window creation
-pub use baseview::{Size, WindowOpenOptions, WindowScalePolicy};
+pub use baseview::dpi::Size;
+pub use baseview::WindowSettings;
 
 // Re-export masonry types commonly used in app code
 pub use masonry;
@@ -76,9 +73,6 @@ pub use xilem_masonry::{AnyWidgetView, MasonryRoot, Pod, ViewCtx, WidgetView};
 /// Convenience re-exports for common usage.
 pub mod prelude {
     pub use crate::view::*;
-    pub use crate::{
-        AnyWidgetView, Size, ViewCtx, WidgetView, WindowOpenOptions, WindowScalePolicy,
-        XilemBaseview,
-    };
+    pub use crate::{AnyWidgetView, Size, ViewCtx, WidgetView, WindowSettings, XilemBaseview};
     pub use masonry::peniko::Color;
 }

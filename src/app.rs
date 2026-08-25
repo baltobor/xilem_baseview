@@ -17,9 +17,9 @@
 
 use std::sync::Arc;
 
-use baseview::{Window, WindowOpenOptions};
+use baseview::{Window, WindowSettings};
 use masonry::peniko::Blob;
-use raw_window_handle::HasRawWindowHandle;
+use raw_window_handle::HasWindowHandle;
 use xilem_masonry::WidgetView;
 
 use crate::driver::BaseviewDriver;
@@ -27,8 +27,16 @@ use crate::handler::XilemHandler;
 
 /// Handle to a Xilem window running in baseview.
 pub struct XilemBaseviewHandle {
-    // Currently empty - baseview handles are fire-and-forget.
-    // In future could add a communication channel for shutdown, etc.
+    window: Window,
+}
+
+impl XilemBaseviewHandle {
+    /// Shows the window. Must be called after `open_parented` for the
+    /// window to actually appear - `Window::create` no longer shows the
+    /// window automatically.
+    pub fn show(&self) {
+        let _ = self.window.show();
+    }
 }
 
 /// Builder for creating Xilem-powered baseview windows.
@@ -46,7 +54,7 @@ pub struct XilemBaseviewHandle {
 /// }
 ///
 /// XilemBaseview::new(AppState { count: 0 }, app_logic)
-///     .open_blocking(WindowOpenOptions { ... });
+///     .open_blocking(WindowSettings::new());
 /// ```
 #[must_use = "A XilemBaseview app does nothing unless opened."]
 pub struct XilemBaseview<State, Logic> {
@@ -96,12 +104,16 @@ where
     ///
     /// This is the primary method for CLAP/VST plugin integration.
     /// The parent handle comes from the audio plugin host.
-    pub fn open_parented<P>(self, parent: &P, options: WindowOpenOptions) -> XilemBaseviewHandle
+    ///
+    /// The returned handle's [`show`](XilemBaseviewHandle::show) must be
+    /// called to actually display the window - creation no longer shows it
+    /// automatically.
+    pub fn open_parented<P>(self, parent: &P, settings: WindowSettings) -> XilemBaseviewHandle
     where
-        P: HasRawWindowHandle,
+        P: HasWindowHandle,
     {
-        let width = options.size.width;
-        let height = options.size.height;
+        let width = settings.size.to_logical(1.0).width;
+        let height = settings.size.to_logical(1.0).height;
 
         // Pass Send-safe components through to the window thread.
         // The driver and handler are created on the window thread itself
@@ -113,21 +125,25 @@ where
 
         let cell = std::sync::Mutex::new(Some((state, logic, runtime, fonts)));
 
-        Window::open_parented(parent, options, move |_| {
+        let settings = settings.with_parent(Some(parent));
+
+        let window = Window::create(settings, move |ctx| {
             let (state, logic, runtime, fonts) = cell.lock().unwrap().take().unwrap();
             let (driver, async_rx) = BaseviewDriver::new(state, logic, runtime, fonts);
-            XilemHandler::new(driver, async_rx, width, height)
-        });
+            XilemHandler::new(&ctx, driver, async_rx, width, height)
+        })
+        .expect("failed to create baseview window");
 
-        XilemBaseviewHandle {}
+        XilemBaseviewHandle { window }
     }
 
     /// Open a standalone window (for testing outside a plugin host).
     ///
-    /// This blocks the current thread until the window is closed.
-    pub fn open_blocking(self, options: WindowOpenOptions) {
-        let width = options.size.width;
-        let height = options.size.height;
+    /// This blocks the current thread until the window is closed, showing
+    /// it automatically.
+    pub fn open_blocking(self, settings: WindowSettings) {
+        let width = settings.size.to_logical(1.0).width;
+        let height = settings.size.to_logical(1.0).height;
 
         let state = self.state;
         let logic = self.logic;
@@ -136,10 +152,13 @@ where
 
         let cell = std::sync::Mutex::new(Some((state, logic, runtime, fonts)));
 
-        Window::open_blocking(options, move |_| {
+        let window = Window::create(settings, move |ctx| {
             let (state, logic, runtime, fonts) = cell.lock().unwrap().take().unwrap();
             let (driver, async_rx) = BaseviewDriver::new(state, logic, runtime, fonts);
-            XilemHandler::new(driver, async_rx, width, height)
-        });
+            XilemHandler::new(&ctx, driver, async_rx, width, height)
+        })
+        .expect("failed to create baseview window");
+
+        let _ = window.run_until_closed();
     }
 }

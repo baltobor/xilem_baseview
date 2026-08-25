@@ -10,7 +10,7 @@
 //! Run with: cargo run --example synth_widgets
 
 use xilem_baseview::prelude::*;
-use xilem_baseview::XilemBaseview;
+use xilem_baseview::{dpi, XilemBaseview};
 use xilem_synth_widgets::{fader, group_box, knob};
 
 struct SynthState {
@@ -76,11 +76,11 @@ fn main() {
         fader_value: -12.0,
     };
 
-    XilemBaseview::new(initial_state, app_logic).open_blocking(WindowOpenOptions {
-        title: "Synth Widgets in xilem_baseview".into(),
-        size: Size::new(400.0, 350.0),
-        scale: WindowScalePolicy::SystemScaleFactor,
-    });
+    XilemBaseview::new(initial_state, app_logic).open_blocking(
+        WindowSettings::new()
+            .with_title("Synth Widgets in xilem_baseview")
+            .with_size(Size::new(dpi::LogicalSize::new(400.0, 350.0))),
+    );
 
     println!("Window closed.");
 }

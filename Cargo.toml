@@ -37,13 +37,13 @@ masonry_imaging = { git = "https://github.com/linebender/xilem", branch = "main"
 wgpu = "28.0.0"
 
 # Baseview for plugin windowing
-baseview = { git = "https://github.com/RustAudio/baseview", rev = "237d323c729f3aa99476ba3efa50129c5e86cad3" }
+baseview = { git = "https://github.com/RustAudio/baseview" }
 
 # Raw window handle - use same version as baseview
-raw-window-handle = "0.5"
+raw-window-handle = "0.6"
 
 # Keyboard handling - use same version as baseview
-keyboard-types = "0.6"
+keyboard-types = "0.8"
 
 # Logging
 tracing = "0.1"

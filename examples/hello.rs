@@ -10,7 +10,7 @@
 //! Run with: cargo run --example hello
 
 use xilem_baseview::prelude::*;
-use xilem_baseview::XilemBaseview;
+use xilem_baseview::{dpi, XilemBaseview};
 
 struct Counter {
     count: i32,
@@ -31,11 +31,11 @@ fn main() {
 
     println!("Opening Xilem baseview window...");
 
-    XilemBaseview::new(Counter { count: 0 }, app_logic).open_blocking(WindowOpenOptions {
-        title: "Xilem Baseview Counter".into(),
-        size: Size::new(300.0, 200.0),
-        scale: WindowScalePolicy::SystemScaleFactor,
-    });
+    XilemBaseview::new(Counter { count: 0 }, app_logic).open_blocking(
+        WindowSettings::new()
+            .with_title("Xilem Baseview Counter")
+            .with_size(Size::new(dpi::LogicalSize::new(300.0, 200.0))),
+    );
 
     println!("Window closed.");
 }
