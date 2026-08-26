@@ -46,7 +46,23 @@ pub(crate) struct XilemHandler<State: 'static, Logic> {
 struct Inner<State: 'static, Logic> {
     driver: BaseviewDriver<State, Logic>,
     render_root: RenderRoot,
-    render_ctx: RenderContext,
+    /// The wgpu render context.
+    ///
+    /// Initialized lazily on the first `on_frame()` call rather than at window
+    /// construction time. This is critical for Linux/XWayland: the wgpu Surface
+    /// (VkSurfaceKHR) must be created only after the X11 window is both:
+    ///   (a) parented to the host container (set via set_parent()), and
+    ///   (b) mapped/visible (set via show()).
+    ///
+    /// If the Surface is created for an unmapped or root-parented X11 window under
+    /// XWayland, the backing Wayland surface is stale/invalid and all presented
+    /// frames are silently discarded → black window. By deferring Surface creation
+    /// to the first frame tick (which baseview only emits when `own_window_is_viewable`
+    /// is true, i.e. the window is parented AND mapped), we guarantee the Surface
+    /// connects to a valid XWayland subsurface.
+    render_ctx: Option<RenderContext>,
+    /// Stored so the render context can be created lazily on the first frame.
+    window_ctx: WindowContext,
     event_translator: EventTranslator,
     pending_signals: Arc<Mutex<Vec<RenderRootSignal>>>,
     async_receiver: tokio::sync::mpsc::UnboundedReceiver<MessagePackage>,
@@ -72,26 +88,28 @@ where
 {
     /// Build the handler for a newly-created window.
     ///
-    /// Unlike the old baseview API, `WindowContext::scale_factor()` and
-    /// `WindowContext::size()` are available synchronously here, so the GPU
-    /// context and RenderRoot can be sized correctly on the very first
-    /// frame - no more deferred "guess scale 1.0, correct on first resize"
-    /// initialization.
+    /// The wgpu surface is **not** created here. It is deferred to the first
+    /// `on_frame()` call, ensuring the window is parented and mapped before the
+    /// Vulkan surface is created (see the `render_ctx` field comment).
     pub(crate) fn new(
         ctx: &WindowContext,
-        mut driver: BaseviewDriver<State, Logic>,
+        driver: BaseviewDriver<State, Logic>,
         async_receiver: tokio::sync::mpsc::UnboundedReceiver<MessagePackage>,
         width: f64,
         height: f64,
     ) -> Result<Self, HandlerError> {
         let scale = ctx.scale_factor();
+        Self::build(driver, async_receiver, width, height, scale, ctx.clone())
+    }
 
-        let phys_width = (width * scale).round().max(1.0) as u32;
-        let phys_height = (height * scale).round().max(1.0) as u32;
-
-        let render_ctx = unsafe { RenderContext::new(ctx, phys_width, phys_height) }
-            .map_err(HandlerError::from)?;
-
+    fn build(
+        mut driver: BaseviewDriver<State, Logic>,
+        async_receiver: tokio::sync::mpsc::UnboundedReceiver<MessagePackage>,
+        width: f64,
+        height: f64,
+        scale: f64,
+        window_ctx: WindowContext,
+    ) -> Result<Self, HandlerError> {
         let initial_widget = driver.build_initial();
 
         let pending_signals = Arc::new(Mutex::new(Vec::new()));
@@ -114,7 +132,10 @@ where
             // breaks hit-testing on any display where scale != 1 (e.g.
             // Retina) - the pointer position is treated as already-logical,
             // so clicks land at 1/scale of the intended widget position.
-            size: masonry::dpi::PhysicalSize::new(phys_width, phys_height),
+            size: masonry::dpi::PhysicalSize::new(
+                (width * scale).round().max(1.0) as u32,
+                (height * scale).round().max(1.0) as u32,
+            ),
             scale_factor: scale,
             test_font: None,
         };
@@ -131,7 +152,8 @@ where
             inner: RefCell::new(Inner {
                 driver,
                 render_root,
-                render_ctx,
+                render_ctx: None,
+                window_ctx,
                 event_translator: EventTranslator::new(scale),
                 pending_signals,
                 async_receiver,
@@ -146,6 +168,30 @@ where
 }
 
 impl<State, Logic> Inner<State, Logic> {
+    /// Ensure the wgpu render context exists, creating it on the first call.
+    ///
+    /// Returns `false` if the context could not be created (error logged).
+    fn ensure_render_ctx(&mut self) -> bool {
+        if self.render_ctx.is_some() {
+            return true;
+        }
+
+        let phys_width = (self.width * self.scale).round().max(1.0) as u32;
+        let phys_height = (self.height * self.scale).round().max(1.0) as u32;
+
+        match unsafe { RenderContext::new(&self.window_ctx, phys_width, phys_height) } {
+            Ok(ctx) => {
+                tracing::info!("wgpu render context initialized on first frame");
+                self.render_ctx = Some(ctx);
+                true
+            }
+            Err(e) => {
+                tracing::error!("Failed to initialize wgpu render context: {}", e);
+                false
+            }
+        }
+    }
+
     fn process_signals<View>(&mut self)
     where
         Logic: FnMut(&mut State) -> View,
@@ -244,7 +290,9 @@ impl<State, Logic> Inner<State, Logic> {
         // (see render.rs) scales the logical-point content by `scale` when
         // compositing, so a surface sized only for 1x overflows and gets
         // clipped once scale > 1 (e.g. MacOS Retina Screen).
-        self.render_ctx.resize(physical_width, physical_height);
+        if let Some(render_ctx) = &mut self.render_ctx {
+            render_ctx.resize(physical_width, physical_height);
+        }
 
         if scale_changed {
             let _ = self
@@ -264,6 +312,10 @@ impl<State, Logic> Inner<State, Logic> {
     }
 
     fn render_frame(&mut self) {
+        if !self.ensure_render_ctx() {
+            return;
+        }
+
         let now = Instant::now();
         let dt = now.duration_since(self.last_frame);
         self.last_frame = now;
@@ -294,10 +346,8 @@ impl<State, Logic> Inner<State, Logic> {
             return;
         };
 
-        if let Err(e) = self
-            .render_ctx
-            .render(root_scene, &overlays, self.base_color, self.scale)
-        {
+        let render_ctx = self.render_ctx.as_mut().unwrap();
+        if let Err(e) = render_ctx.render(root_scene, &overlays, self.base_color, self.scale) {
             tracing::error!("Render error: {}", e);
         }
     }

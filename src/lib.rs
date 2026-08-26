@@ -55,6 +55,7 @@ pub use app::{XilemBaseview, XilemBaseviewHandle};
 
 // Re-export baseview types needed for window creation
 pub use baseview::dpi::Size;
+pub use baseview::ParentWindowHandle;
 pub use baseview::WindowSettings;
 
 // Re-export masonry types commonly used in app code

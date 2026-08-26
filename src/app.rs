@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use baseview::{Window, WindowSettings};
+use baseview::{ParentWindowHandle, Window, WindowSettings};
 use masonry::peniko::Blob;
 use raw_window_handle::HasWindowHandle;
 use xilem_masonry::WidgetView;
@@ -31,11 +31,26 @@ pub struct XilemBaseviewHandle {
 }
 
 impl XilemBaseviewHandle {
-    /// Shows the window. Must be called after `open_parented` for the
-    /// window to actually appear - `Window::create` no longer shows the
-    /// window automatically.
+    /// Shows the window. Must be called after `open_parented` (or after
+    /// `set_parent` on the `open_waiting_for_parent` path) for the window
+    /// to actually appear.
     pub fn show(&self) {
         let _ = self.window.show();
+    }
+
+    /// Hides the window without destroying it.
+    pub fn hide(&self) {
+        let _ = self.window.hide();
+    }
+
+    /// Reparents this window to the given host parent window.
+    ///
+    /// Call this from the CLAP `set_parent` callback when the window was
+    /// created via [`XilemBaseview::open_waiting_for_parent`], then call
+    /// [`show`](Self::show) to make it visible.
+    #[cfg(target_os = "linux")]
+    pub fn set_parent(&self, parent: impl Into<ParentWindowHandle>) -> Result<(), baseview::Error> {
+        self.window.set_parent(parent)
     }
 }
 
@@ -98,6 +113,39 @@ where
     pub fn with_font(mut self, data: impl Into<Blob<u8>>) -> Self {
         self.fonts.push(data.into());
         self
+    }
+
+    /// Create a window that will be parented later via
+    /// [`XilemBaseviewHandle::set_parent`] + [`XilemBaseviewHandle::show`].
+    ///
+    /// Use this on Linux to pre-initialize the GPU context during the CLAP
+    /// `create` callback, so that `set_parent` / `show` return quickly and
+    /// don't exceed host timeouts (e.g. Bitwig's ~1 s window-appearance check).
+    ///
+    /// The window is created as a child of the X11 root and is unmapped until
+    /// `set_parent` + `show` are called.
+    #[cfg(target_os = "linux")]
+    pub fn open_waiting_for_parent(self, settings: WindowSettings) -> XilemBaseviewHandle {
+        let width = settings.size.to_logical(1.0).width;
+        let height = settings.size.to_logical(1.0).height;
+
+        let state = self.state;
+        let logic = self.logic;
+        let runtime = self.runtime;
+        let fonts = self.fonts;
+
+        let cell = std::sync::Mutex::new(Some((state, logic, runtime, fonts)));
+
+        let settings = settings.wait_for_parent();
+
+        let window = Window::create(settings, move |ctx| {
+            let (state, logic, runtime, fonts) = cell.lock().unwrap().take().unwrap();
+            let (driver, async_rx) = BaseviewDriver::new(state, logic, runtime, fonts);
+            XilemHandler::new(&ctx, driver, async_rx, width, height)
+        })
+        .expect("failed to create baseview window");
+
+        XilemBaseviewHandle { window }
     }
 
     /// Open a window parented to another window (for plugin UIs).

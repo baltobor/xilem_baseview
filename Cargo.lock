@@ -442,7 +442,7 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 [[package]]
 name = "baseview"
 version = "0.3.2"
-source = "git+https://github.com/RustAudio/baseview#71ae1eeae4810d7a0fce1caa0ee6086559fe5617"
+source = "git+https://github.com/baltobor/baseview#98e52e44f937f510c011339d821cca1e7f33ff95"
 dependencies = [
  "block2 0.6.2",
  "bytemuck",
@@ -4727,7 +4727,7 @@ dependencies = [
 
 [[package]]
 name = "xilem_baseview"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "baseview",
  "keyboard-types",

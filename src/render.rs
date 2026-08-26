@@ -21,12 +21,96 @@ use std::sync::Arc;
 use masonry::peniko::Color;
 use masonry_imaging::vello::{Renderer as ImagingRenderer, TextureTarget};
 use masonry_imaging::{Layer as ImagingLayer, PreparedFrame, TextureRenderer};
+use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use wgpu::util::TextureBlitter;
 use wgpu::{
-    CompositeAlphaMode, Device, DeviceDescriptor, Features, Instance, InstanceDescriptor, Limits,
-    PresentMode, Queue, Surface, SurfaceConfiguration, Texture, TextureDescriptor,
+    Adapter, CompositeAlphaMode, Device, DeviceDescriptor, Features, Instance, InstanceDescriptor,
+    Limits, PresentMode, Queue, Surface, SurfaceConfiguration, Texture, TextureDescriptor,
     TextureDimension, TextureFormat, TextureUsages, TextureView, TextureViewDescriptor,
 };
+
+/// Pre-initialized wgpu state (adapter, device, queue, renderer) that can be
+/// created before a window surface exists.
+///
+/// On Linux/XWayland, Vulkan surfaces created for root-parented X11 windows
+/// produce black content after reparenting. The fix is to separate the slow
+/// GPU initialization (done in CLAP `create()`) from surface creation (done
+/// in CLAP `show()` for an already-parented window).
+///
+/// `WgpuPreInit` is `Send` so it can be stored in `GuiState` and moved to
+/// the window thread when the window is created.
+pub struct WgpuPreInit {
+    pub instance: Instance,
+    pub adapter: Adapter,
+    pub device: Arc<Device>,
+    pub queue: Arc<Queue>,
+    pub renderer: ImagingRenderer,
+}
+
+// Safety: WgpuPreInit is created on the main thread and moved to the window
+// thread before use. ImagingRenderer (= masonry_imaging::vello::Renderer)
+// contains non-Send internals but is used only after being moved to the
+// window thread, never accessed concurrently from multiple threads.
+unsafe impl Send for WgpuPreInit {}
+
+impl WgpuPreInit {
+    /// Initialize the wgpu adapter, device, queue, and renderer without a
+    /// surface. This is the slow step (GPU driver probing) and should be done
+    /// in the CLAP `create()` callback.
+    pub fn new() -> Result<Self, RenderError> {
+        let instance = Instance::new(&InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..Default::default()
+        });
+
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            compatible_surface: None,
+            force_fallback_adapter: false,
+        }))
+        .map_err(|e: wgpu::RequestAdapterError| {
+            RenderError::Device(format!("Adapter request failed: {:?}", e))
+        })?;
+
+        let (device, queue) = pollster::block_on(adapter.request_device(&DeviceDescriptor {
+            required_features: Features::empty(),
+            required_limits: Limits::default(),
+            label: Some("xilem_baseview_preinit"),
+            memory_hints: wgpu::MemoryHints::default(),
+            ..Default::default()
+        }))
+        .map_err(|e: wgpu::RequestDeviceError| RenderError::Device(format!("{:?}", e)))?;
+
+        let device = Arc::new(device);
+        let queue = Arc::new(queue);
+
+        let renderer = ImagingRenderer::new((*device).clone(), (*queue).clone())
+            .map_err(|e| RenderError::Renderer(e.to_string()))?;
+
+        Ok(Self {
+            instance,
+            adapter,
+            device,
+            queue,
+            renderer,
+        })
+    }
+}
+
+/// Stores the raw window/display handles needed to recreate the wgpu Surface.
+///
+/// The raw handles contain pointers (e.g. xcb_connection_t*) that are not Send,
+/// but RenderContext is only ever accessed from the window thread, so this is sound.
+struct RawHandles {
+    raw_window_handle: RawWindowHandle,
+    raw_display_handle: RawDisplayHandle,
+}
+
+// Safety: RenderContext (and hence RawHandles) is only accessed from the
+// window thread. The underlying pointers (X11 connection, window ID) are
+// valid for the lifetime of the window.
+unsafe impl Send for RawHandles {}
+unsafe impl Sync for RawHandles {}
 
 /// GPU rendering context: owns the wgpu surface and masonry's own renderer.
 ///
@@ -41,6 +125,8 @@ pub struct RenderContext {
     pub device: Arc<Device>,
     pub queue: Arc<Queue>,
     renderer: ImagingRenderer,
+    instance: Instance,
+    raw_handles: RawHandles,
     surface: Surface<'static>,
     surface_config: SurfaceConfiguration,
     target_texture: Texture,
@@ -67,6 +153,16 @@ impl RenderContext {
             backends: wgpu::Backends::all(),
             ..Default::default()
         });
+
+        // Store raw handles for potential surface recreation after reparenting.
+        let raw_window_handle = window
+            .window_handle()
+            .map_err(|e| RenderError::Surface(format!("No window handle: {e}")))?
+            .as_raw();
+        let raw_display_handle = window
+            .display_handle()
+            .map_err(|e| RenderError::Surface(format!("No display handle: {e}")))?
+            .as_raw();
 
         // baseview and wgpu both use raw-window-handle 0.6 now, so no manual
         // handle-format conversion is needed (unlike when baseview was on
@@ -98,7 +194,101 @@ impl RenderContext {
         let device = Arc::new(device);
         let queue = Arc::new(queue);
 
-        let caps = surface.get_capabilities(&adapter);
+        let surface_config = Self::make_surface_config(&surface, &adapter, width, height);
+        surface.configure(&device, &surface_config);
+
+        let (target_texture, target_view) =
+            create_target_texture(&device, surface_config.width, surface_config.height);
+        let blitter = TextureBlitter::new(&device, surface_config.format);
+
+        let renderer = ImagingRenderer::new((*device).clone(), (*queue).clone())
+            .map_err(|e| RenderError::Renderer(e.to_string()))?;
+
+        Ok(Self {
+            device,
+            queue,
+            renderer,
+            instance,
+            raw_handles: RawHandles {
+                raw_window_handle,
+                raw_display_handle,
+            },
+            surface,
+            surface_config,
+            target_texture,
+            target_view,
+            blitter,
+        })
+    }
+
+    /// Create a render context using a pre-initialized wgpu state.
+    ///
+    /// This is the fast path for Linux/XWayland: the slow GPU initialization
+    /// (adapter + device + renderer) was already done in [`WgpuPreInit::new()`].
+    /// Only the surface is created here, which is fast and must be done after
+    /// the window is already parented (so XWayland has a real backing surface).
+    ///
+    /// # Safety
+    ///
+    /// The window handle must remain valid for the lifetime of this context,
+    /// and the window must already be parented to its final parent at the time
+    /// this is called (so XWayland's surface is stable).
+    pub unsafe fn with_preinit<W>(
+        window: &W,
+        width: u32,
+        height: u32,
+        preinit: WgpuPreInit,
+    ) -> Result<Self, RenderError>
+    where
+        W: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle,
+    {
+        let raw_window_handle = window
+            .window_handle()
+            .map_err(|e| RenderError::Surface(format!("No window handle: {e}")))?
+            .as_raw();
+        let raw_display_handle = window
+            .display_handle()
+            .map_err(|e| RenderError::Surface(format!("No display handle: {e}")))?
+            .as_raw();
+
+        let target = wgpu::SurfaceTargetUnsafe::from_window(window)
+            .map_err(|e| RenderError::Surface(e.to_string()))?;
+        let surface = preinit
+            .instance
+            .create_surface_unsafe(target)
+            .map_err(|e: wgpu::CreateSurfaceError| RenderError::Surface(e.to_string()))?;
+
+        let surface_config = Self::make_surface_config(&surface, &preinit.adapter, width, height);
+        surface.configure(&preinit.device, &surface_config);
+
+        let (target_texture, target_view) =
+            create_target_texture(&preinit.device, surface_config.width, surface_config.height);
+        let blitter = TextureBlitter::new(&preinit.device, surface_config.format);
+
+        Ok(Self {
+            device: preinit.device,
+            queue: preinit.queue,
+            renderer: preinit.renderer,
+            instance: preinit.instance,
+            raw_handles: RawHandles {
+                raw_window_handle,
+                raw_display_handle,
+            },
+            surface,
+            surface_config,
+            target_texture,
+            target_view,
+            blitter,
+        })
+    }
+
+    fn make_surface_config(
+        surface: &Surface<'_>,
+        adapter: &wgpu::Adapter,
+        width: u32,
+        height: u32,
+    ) -> SurfaceConfiguration {
+        let caps = surface.get_capabilities(adapter);
         let surface_format = caps
             .formats
             .iter()
@@ -115,38 +305,16 @@ impl RenderContext {
             CompositeAlphaMode::Auto
         };
 
-        let width = width.max(1);
-        let height = height.max(1);
-
-        let surface_config = SurfaceConfiguration {
+        SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
-            width,
-            height,
+            width: width.max(1),
+            height: height.max(1),
             present_mode: PresentMode::AutoVsync,
             alpha_mode,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
-        };
-
-        surface.configure(&device, &surface_config);
-
-        let (target_texture, target_view) = create_target_texture(&device, width, height);
-        let blitter = TextureBlitter::new(&device, surface_format);
-
-        let renderer = ImagingRenderer::new((*device).clone(), (*queue).clone())
-            .map_err(|e| RenderError::Renderer(e.to_string()))?;
-
-        Ok(Self {
-            device,
-            queue,
-            renderer,
-            surface,
-            surface_config,
-            target_texture,
-            target_view,
-            blitter,
-        })
+        }
     }
 
     /// Resize the rendering surface. `width`/`height` are physical pixels
@@ -162,6 +330,57 @@ impl RenderContext {
         let (target_texture, target_view) = create_target_texture(&self.device, width, height);
         self.target_texture = target_texture;
         self.target_view = target_view;
+    }
+
+    /// Destroy the current wgpu Surface and create a fresh one for the same
+    /// window.
+    ///
+    /// This is needed on Linux/XWayland after `open_waiting_for_parent`: the
+    /// original Surface is created while the X11 window is unmapped and
+    /// parented to root, so XWayland has no real Wayland surface backing it.
+    /// After `set_parent` + `show` the window becomes a properly-composited
+    /// subsurface, but the old VkSurfaceKHR still references the stale
+    /// XWayland state. Recreating the Surface forces the Vulkan driver to
+    /// establish a new connection to the now-valid Wayland surface.
+    pub fn recreate_surface(&mut self) -> Result<(), RenderError> {
+        let target = wgpu::SurfaceTargetUnsafe::RawHandle {
+            raw_display_handle: self.raw_handles.raw_display_handle,
+            raw_window_handle: self.raw_handles.raw_window_handle,
+        };
+        let new_surface = unsafe {
+            self.instance
+                .create_surface_unsafe(target)
+                .map_err(|e| RenderError::Surface(e.to_string()))?
+        };
+
+        // Re-query adapter to ensure the new surface has compatible capabilities.
+        let adapter =
+            pollster::block_on(self.instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::LowPower,
+                compatible_surface: Some(&new_surface),
+                force_fallback_adapter: false,
+            }))
+            .map_err(|e| RenderError::Device(format!("Adapter re-request failed: {:?}", e)))?;
+
+        let new_config = Self::make_surface_config(
+            &new_surface,
+            &adapter,
+            self.surface_config.width,
+            self.surface_config.height,
+        );
+        new_surface.configure(&self.device, &new_config);
+
+        let (target_texture, target_view) =
+            create_target_texture(&self.device, new_config.width, new_config.height);
+        self.blitter = TextureBlitter::new(&self.device, new_config.format);
+
+        self.surface = new_surface;
+        self.surface_config = new_config;
+        self.target_texture = target_texture;
+        self.target_view = target_view;
+
+        tracing::debug!("wgpu Surface recreated after reparent/map");
+        Ok(())
     }
 
     /// Render a masonry frame (base scene plus overlays) to the surface.
@@ -193,10 +412,16 @@ impl RenderContext {
             )
             .map_err(|e| RenderError::Renderer(e.to_string()))?;
 
-        let surface_texture = self
-            .surface
-            .get_current_texture()
-            .map_err(|e: wgpu::SurfaceError| RenderError::Surface(e.to_string()))?;
+        let surface_texture = match self.surface.get_current_texture() {
+            Ok(texture) => texture,
+            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                self.surface.configure(&self.device, &self.surface_config);
+                self.surface
+                    .get_current_texture()
+                    .map_err(|e| RenderError::Surface(e.to_string()))?
+            }
+            Err(e) => return Err(RenderError::Surface(e.to_string())),
+        };
 
         let surface_view = surface_texture
             .texture
