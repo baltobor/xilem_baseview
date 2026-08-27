@@ -80,6 +80,39 @@ struct Inner<State: 'static, Logic> {
     scale: f64,
 }
 
+/// Create a pending-signal buffer and a closure that appends to it.
+fn make_signal_sink() -> (
+    Arc<Mutex<Vec<RenderRootSignal>>>,
+    impl FnMut(RenderRootSignal),
+) {
+    let pending = Arc::new(Mutex::new(Vec::new()));
+    let sink_ref = pending.clone();
+    let sink = move |signal: RenderRootSignal| {
+        sink_ref.lock().unwrap().push(signal);
+    };
+    (pending, sink)
+}
+
+/// Build RenderRootOptions from logical window size and scale factor.
+///
+/// RenderRoot's `size` is physical pixels; it derives the logical layout
+/// size internally via `size.to_logical(scale_factor)`. Passing `scale_factor: 1.0`
+/// while feeding real physical pointer positions would silently break hit-testing
+/// on HiDPI displays (clicks land at 1/scale of the intended position).
+fn render_root_options(width: f64, height: f64, scale: f64) -> RenderRootOptions {
+    RenderRootOptions {
+        default_properties: Arc::new(default_property_set()),
+        use_system_fonts: true,
+        size_policy: WindowSizePolicy::User,
+        size: masonry::dpi::PhysicalSize::new(
+            (width * scale).round().max(1.0) as u32,
+            (height * scale).round().max(1.0) as u32,
+        ),
+        scale_factor: scale,
+        test_font: None,
+    }
+}
+
 impl<State, Logic, View> XilemHandler<State, Logic>
 where
     State: 'static,
@@ -111,43 +144,13 @@ where
         window_ctx: WindowContext,
     ) -> Result<Self, HandlerError> {
         let initial_widget = driver.build_initial();
-
-        let pending_signals = Arc::new(Mutex::new(Vec::new()));
-        let signals = pending_signals.clone();
-        let signal_sink = move |signal: RenderRootSignal| {
-            signals.lock().unwrap().push(signal);
-        };
-
-        let options = RenderRootOptions {
-            default_properties: Arc::new(default_property_set()),
-            use_system_fonts: true,
-            size_policy: WindowSizePolicy::User,
-            // RenderRoot's `size` is physical pixels; it derives the logical
-            // layout size internally via `size.to_logical(scale_factor)`
-            // (masonry_core::app::render_root::get_kurbo_size), and the same
-            // `scale_factor` is used to convert incoming physical pointer
-            // positions to logical hit-test coordinates
-            // (masonry_core::passes::event). Passing scale_factor: 1.0 here
-            // while feeding it real physical pointer positions silently
-            // breaks hit-testing on any display where scale != 1 (e.g.
-            // Retina) - the pointer position is treated as already-logical,
-            // so clicks land at 1/scale of the intended widget position.
-            size: masonry::dpi::PhysicalSize::new(
-                (width * scale).round().max(1.0) as u32,
-                (height * scale).round().max(1.0) as u32,
-            ),
-            scale_factor: scale,
-            test_font: None,
-        };
-
+        let (pending_signals, signal_sink) = make_signal_sink();
+        let options = render_root_options(width, height, scale);
         let mut render_root =
             RenderRoot::new(initial_widget.0.new_widget.erased(), signal_sink, options);
-
         driver.register_fonts(&mut render_root);
         driver.set_focus_fallback(&mut render_root);
-
         tracing::info!("Xilem widget tree initialized");
-
         Ok(Self {
             inner: RefCell::new(Inner {
                 driver,
