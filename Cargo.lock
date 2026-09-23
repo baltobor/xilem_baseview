@@ -441,8 +441,8 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "baseview"
-version = "0.3.2"
-source = "git+https://github.com/baltobor/baseview#98e52e44f937f510c011339d821cca1e7f33ff95"
+version = "0.3.4"
+source = "git+https://github.com/RustAudio/baseview#4dce047c2a54bf50d49f9ad7c9c739c3d0f5f511"
 dependencies = [
  "block2 0.6.2",
  "bytemuck",
@@ -450,6 +450,7 @@ dependencies = [
  "dispatch2",
  "dpi",
  "keyboard-types",
+ "libloading",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-core-foundation",
@@ -536,9 +537,9 @@ checksum = "5d20789868f4b01b2f2caec9f5c4e0213b41e3e5702a50157d699ae31ced2fcb"
 
 [[package]]
 name = "bytemuck"
-version = "1.25.0"
+version = "1.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8efb64bd706a16a1bdde310ae86b351e4d21550d98d056f22f8a7f7a2183fec"
+checksum = "95832e849adfb21180ccb6826a99da14e5d266ae5c2e668e1602cf234f153797"
 dependencies = [
  "bytemuck_derive",
 ]
@@ -933,7 +934,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2778,7 +2779,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3147,7 +3148,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4157,7 +4158,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
