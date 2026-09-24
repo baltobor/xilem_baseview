@@ -24,6 +24,7 @@ use std::time::Instant;
 use baseview::{Event, EventStatus, HandlerError, WindowContext, WindowHandler, WindowSize};
 use masonry::app::VisualLayerKind;
 use masonry::app::{RenderRoot, RenderRootOptions, RenderRootSignal, WindowSizePolicy};
+use masonry::core::TextEvent as MasonryTextEvent;
 use masonry::core::WindowEvent as MasonryWindowEvent;
 use masonry::peniko::Color;
 use masonry::theme::default_property_set;
@@ -269,8 +270,10 @@ impl<State, Logic> Inner<State, Logic> {
             MasonryEvent::Pointer(ptr_event) => {
                 let _ = self.render_root.handle_pointer_event(ptr_event);
             }
-            MasonryEvent::Keyboard(_kb_event) => {
-                // TODO: Convert keyboard_types to masonry's TextEvent
+            MasonryEvent::Keyboard(kb_event) => {
+                let _ = self
+                    .render_root
+                    .handle_text_event(MasonryTextEvent::Keyboard(kb_event));
             }
             MasonryEvent::Focus(_) => {}
             MasonryEvent::Close => {}
@@ -362,11 +365,20 @@ where
     Logic: FnMut(&mut State) -> View + 'static,
     View: WidgetView<State> + 'static,
 {
-    fn on_frame(&self) -> Result<(), HandlerError> {
+    fn poll(&self) {
         let mut inner = self.inner.borrow_mut();
         inner.process_signals();
         inner.process_async_messages();
+    }
+
+    fn draw(&self) -> Result<(), HandlerError> {
+        let mut inner = self.inner.borrow_mut();
         inner.render_frame();
+        // request_redraw() must be called from draw(), not poll(). The event loop
+        // calls redraw() (which clears present_notify_requested) and THEN calls
+        // draw() — so any request_redraw() from poll() would already be cleared.
+        // Calling it here schedules the next frame correctly.
+        inner.window_ctx.request_redraw();
         Ok(())
     }
 

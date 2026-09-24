@@ -4,7 +4,10 @@ An experimental baseview backend for the reactive [Xilem](https://github.com/lin
 
 This project is an experimental attempt to bridge between Xilem and [Baseview](https://github.com/RustAudio/baseview) for creating audio plugin UIs.
 
-**Status:** Experimental. A feature request with the Xilem team for official baseview support was issued: 
+**Status:** Still Experimental. This version is pinned to the baseview [PR #340](https://github.com/RustAudio/baseview/pull/340)  
+
+** History:**
+A feature request with the Xilem team for official baseview support was issued: 
 https://github.com/linebender/xilem/issues/1626
 
 It was tested on 
