@@ -6,12 +6,12 @@ This project is an experimental attempt to bridge between Xilem and [Baseview](h
 
 **Status:** Still Experimental. This version is pinned to the baseview [PR #340](https://github.com/RustAudio/baseview/pull/340)  
 
-** History:**
+**History:**
 A feature request with the Xilem team for official baseview support was issued: 
 https://github.com/linebender/xilem/issues/1626
 
 It was tested on 
-- MacOS Tahoe 26.3
+- MacOS Tahoe 26.5.2
 - Arch Linux with Cosmic Desktop (Wayland) 
 
 ## The Problem
